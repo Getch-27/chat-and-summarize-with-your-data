@@ -54,3 +54,6 @@ typings/
 
 # Webpack files
 dist/
+
+#vertual environment
+.venv/
