@@ -1,46 +1,54 @@
-from flask import Flask, request, jsonify # type: ignore
-import os
+from flask import Flask, request, jsonify
 from flask_cors import CORS
-import nbformat
-from nbconvert.preprocessors import ExecutePreprocessor
+import os
+from llm import load_document_and_split, embed_documents, setup_retrieval_chain, handle_chat
 
 app = Flask(__name__)
-CORS(app)
+CORS(app)  # Enable CORS for all routes
 
-@app.route('/api/process', methods=['POST' , 'OPTIONS'])
-def process():
-    if request.method == 'OPTIONS':
-        # Handle OPTIONS request (e.g., return CORS headers)
-        response = jsonify({'message': 'CORS preflight request handled'})
-        response.headers.add('Access-Control-Allow-Origin', '*')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-        response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
-        return response
-    
+context = None
+vectordb = None
+qa = None
+
+@app.route('/api/load_document', methods=['POST'])
+def load_document():
+    global context, qa ,vectordb
+
+    if 'document' not in request.files:
+        return jsonify({'error': 'Document not provided'}), 400
+
+    file = request.files['document']
+
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    if file:
+        document_path = os.path.join('./uploads', file.filename)
+        file.save(document_path)
+
+        context = load_document_and_split(document_path)
+        vectordb = embed_documents(context)
+        # qa = setup_retrieval_chain(vectordb)
+
+        return jsonify({'message': 'Document loaded and embedded successfully'})
+
+@app.route('/api/chat', methods=['POST'])
+def chat():
+    global qa
+    global vectordb
+    qa =setup_retrieval_chain(vectordb)
+
+    if qa is None:
+        return jsonify({'error': 'No document loaded. Please load a document first.'}), 400
 
     data = request.json
-    input_text = data.get('input')
-    
-    
-    # Call the Jupyter notebook
-    output = execute_notebook(input_text)
-    return jsonify({'output': output})
-def execute_notebook(input_text):
-    # Load the notebook
-    notebook_path = os.path.join(os.path.dirname(__file__), 'llm.ipynb' )
-    with open(notebook_path) as f:
-        nb = nbformat.read(f, as_version=4)
-    
-    # Inject the input into the notebook's 4th cell
-    nb.cells[3].source = f"input_text = '{input_text}'\n" + nb.cells[3].source
-    
-    # Execute the notebook
-    ep = ExecutePreprocessor(timeout=600, kernel_name='python3')
-    ep.preprocess(nb, {'metadata': {'path': './'}})
-    
-    # Extract the output from the last cell
-    output = nb.cells[-1].outputs[0]['text']
-    return output
+    question = data.get('question')
+
+    if not question:
+        return jsonify({'error': 'Question not provided'}), 400
+
+    answer = handle_chat(qa, question)
+    return jsonify({'answer': answer})
 
 if __name__ == '__main__':
     app.run(debug=True)
